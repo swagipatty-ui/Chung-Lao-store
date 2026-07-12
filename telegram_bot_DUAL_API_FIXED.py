@@ -21,7 +21,7 @@ from typing import List, Dict, Tuple
 # =====================================================
 
 # 🔴 CHANGE THESE VALUES BEFORE GOING LIVE 🔴
-TELEGRAM_TOKEN = '8867593499:AAEmZMLV1tWUMUCFhY-s8blSb528f1L4OHY'  # Get from @BotFather
+TELEGRAM_TOKEN = '8867593499:AAFF0AXQqeCZ1gpxwFgjatuMURGhB7pbchk'  # Get from @BotFather
 ADMIN_ID = 7190018261                     # Your Telegram ID (from @userinfobot)
 
 # PRIMARY API Configuration (CEOACC)
@@ -34,7 +34,7 @@ PRIMARY_API_NAME = "CEOACC"
 SECONDARY_API_BASE_URL = 'https://jejelayegct.com.ng/api/v1'
 SECONDARY_API_TOKEN = '149|FgZo2xfcofM7AFTGwHLXFe1wQbygvSeJuzTPKhwec21d1df9'
 SECONDARY_API_USERNAME = 'YUYU Bubu'
-SECONDARY_API_PASSWORD = 'YOUR_PASSWORD_HERE'  # ⚠️ FILL THIS IN
+SECONDARY_API_PASSWORD = 'Ukhuegbe1$'  # ⚠️ FILL THIS IN
 SECONDARY_API_NAME = "JEJELAYE"
 
 # Business Settings
