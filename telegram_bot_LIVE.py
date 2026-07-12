@@ -19,19 +19,19 @@ import requests
 # =====================================================
 
 # 🔴 CHANGE THESE VALUES BEFORE GOING LIVE 🔴
-TELEGRAM_TOKEN = 'YOUR_BOT_TOKEN_HERE'  # Get from @BotFather
-ADMIN_ID = 123456789                     # Your Telegram ID (from @userinfobot)
+TELEGRAM_TOKEN = '8867593499:AAEmZMLV1tWUMUCFhY-s8blSb528f1L4OHY'  # Get from @BotFather
+ADMIN_ID = 7190018261                     # Your Telegram ID (from @userinfobot)
 
 # API Configuration
 API_BASE_URL = 'https://ceoacc.com'
-API_USERNAME = 'your_api_username'       # Get from ceoacc.com
-API_PASSWORD = 'your_api_password'       # Get from ceoacc.com
+API_USERNAME = 'Bubu'       # Get from ceoacc.com
+API_PASSWORD = 'Ukhuegbe1$'       # Get from ceoacc.com
 
 # Business Settings
 MARKUP_PERCENT = 40  # Sell at 140% of original price
 CURRENCY = 'USD'
-USDT_ADDRESS = 'YOUR_USDT_WALLET_ADDRESS'
-ADMIN_USERNAME = '@YourTelegramHandle'
+USDT_ADDRESS = '9iSxbfgskyBdXEfniWTZ4pGUi4qXRnRGSuFu8dAVanbZ'
+ADMIN_USERNAME = '@magicnigga'
 
 # File Configuration
 DATA_FILE = 'users.json'
@@ -153,7 +153,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "🏪 *Welcome to Chung Lao Store* 🏪\n\n"
-        "Premium Social Accounts at Best Prices!\n"
+        "Social Accounts at Best Prices!\n"
         f"💸 *{MARKUP_PERCENT}% OFF* Markup\n\n"
         "*Quick Links:*\n"
         "/balance - Check wallet\n"
