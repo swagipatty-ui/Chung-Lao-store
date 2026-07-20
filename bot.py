@@ -21,10 +21,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONFIGURATION ====================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8867593499:AAFs7L3Itycx-YJx9hbACpDODLpkaR6-qCo")
 API_BASE_URL = "https://jejelayegct.com.ng/api/v1"
 MARKUP_PERCENTAGE = float(os.getenv("MARKUP_PERCENTAGE", "30"))
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "1234567890").split(","))) if os.getenv("ADMIN_IDS") else [1234567890]
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "7190018261").split(","))) if os.getenv("ADMIN_IDS") else [1234567890]
 
 # States for conversation
 BUYING, PAYMENT_PENDING = range(2)
