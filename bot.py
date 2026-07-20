@@ -23,16 +23,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONFIGURATION ====================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8867593499:AAFs7L3Itycx-YJx9hbACpDODLpkaR6-qCo")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8867593499:AAHSPpjuOlJ_OcycDenPZ1wreDo8MxShSNE")
 JEJELAYE_API_KEY = os.getenv("JEJELAYE_API_KEY", "172|LkO4Jcpfdfrb8TAgYmWCIDiuh9p1xBvvtAqkhrnAa44ff72c")
 API_BASE_URL = "https://jejelayegct.com.ng/api/v1"
 MARKUP_PERCENTAGE = float(os.getenv("MARKUP_PERCENTAGE", "30"))
 ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "7190018261").split(",")))
 
 # Bank transfer details shown to users for manual top-up (EDIT THESE)
-BANK_NAME = os.getenv("BANK_NAME", "YOUR BANK NAME")
-BANK_ACCOUNT_NUMBER = os.getenv("BANK_ACCOUNT_NUMBER", "0000000000")
-BANK_ACCOUNT_NAME = os.getenv("BANK_ACCOUNT_NAME", "YOUR ACCOUNT NAME")
+BANK_NAME = os.getenv("BANK_NAME", "opay")
+BANK_ACCOUNT_NUMBER = os.getenv("BANK_ACCOUNT_NUMBER", "8144841843")
+BANK_ACCOUNT_NAME = os.getenv("BANK_ACCOUNT_NAME", "YOUNG")
 
 BUSINESS_NAME = "Chung Lao Store"
 
