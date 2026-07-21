@@ -23,14 +23,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONFIGURATION ====================
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8867593499:AAEkBIvcbCavkRPo5xE2I2ufK3itmb2ErJc")
-JEJELAYE_API_KEY = os.getenv("JEJELAYE_API_KEY", "172|LkO4Jcpfdfrb8TAgYmWCIDiuh9p1xBvvtAqkhrnAa44ff72c")
-API_BASE_URL = "https://jejelayegct.com.ng/api/v1"
+# All secrets come from environment variables only — no hardcoded
+# fallbacks. Set these before running, e.g.:
+#   export TELEGRAM_BOT_TOKEN="your-token-from-botfather"
+#   export JEJELAYE_API_KEY="your-api-key"
+#   export ADMIN_IDS="7190018261"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+JEJELAYE_API_KEY = os.getenv("JEJELAYE_API_KEY", "")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://jejelayegct.com.ng/api/v1")
 MARKUP_PERCENTAGE = float(os.getenv("MARKUP_PERCENTAGE", "30"))
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "7190018261").split(",")))
+ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "").split(","))) if os.getenv("ADMIN_IDS") else []
 
-# Bank transfer details shown to users for manual top-up (EDIT THESE)
-BANK_NAME = os.getenv("BANK_NAME", "opay")
+# Bank transfer details shown to users for manual top-up
+BANK_NAME = os.getenv("BANK_NAME", "OPAY")
 BANK_ACCOUNT_NUMBER = os.getenv("BANK_ACCOUNT_NUMBER", "8144841843")
 BANK_ACCOUNT_NAME = os.getenv("BANK_ACCOUNT_NAME", "YOUNG")
 
@@ -187,6 +192,85 @@ class APIHandler:
         self.cache_time.clear()
         logger.info("Cache cleared")
 
+    def fetch_all_pages(self, base_endpoint, max_pages=200):
+        """Follow Laravel-style pagination (?page=1, 2, 3...) and collect
+        every item across all pages, not just the first page.
+
+        Handles the common response shapes:
+          {"current_page": 1, "last_page": 5, "data": [...]}
+          {"current_page": 1, "total": 120, "per_page": 15, "data": [...]}
+          {"data": [...], "meta": {"last_page": 5}}
+          [...]  (a plain list, no pagination at all)
+
+        Stops when: last_page is reached, a page returns no new items,
+        or max_pages is hit (safety net against an infinite loop if the
+        API's pagination fields don't match what we expect).
+        """
+        all_items = []
+        seen_ids = set()
+        page = 1
+        separator = "&" if "?" in base_endpoint else "?"
+
+        while page <= max_pages:
+            endpoint = f"{base_endpoint}{separator}page={page}"
+            data = self.fetch(endpoint)
+
+            if data is None:
+                break
+
+            # Plain list response, no pagination wrapper at all
+            if isinstance(data, list):
+                items = data
+                last_page = 1
+            else:
+                items = data.get('data', [])
+                # meta may be nested (e.g. {"meta": {"last_page": N}}) or flat
+                meta = data.get('meta', {}) if isinstance(data.get('meta'), dict) else {}
+                last_page = (
+                    data.get('last_page')
+                    or meta.get('last_page')
+                    or data.get('total_pages')
+                )
+                if last_page is None:
+                    # Try to derive it from total/per_page if present
+                    total = data.get('total') or meta.get('total')
+                    per_page = data.get('per_page') or meta.get('per_page') or len(items) or 1
+                    if total:
+                        last_page = max(1, -(-int(total) // int(per_page)))  # ceil division
+
+            if not items:
+                break
+
+            new_count = 0
+            for item in items:
+                item_id = item.get('id') if isinstance(item, dict) else None
+                if item_id is not None:
+                    if item_id in seen_ids:
+                        continue
+                    seen_ids.add(item_id)
+                all_items.append(item)
+                new_count += 1
+
+            # No new items on this page -> we've looped back or hit the end
+            if new_count == 0:
+                break
+
+            if last_page is not None and page >= int(last_page):
+                break
+
+            # If there's no pagination info at all and we got a full page
+            # of items, we can't safely guess whether more exist, so stop
+            # after page 1 to avoid hammering the API forever.
+            if last_page is None and len(items) < 15:
+                break
+            if last_page is None and page >= 1 and isinstance(data, list):
+                break
+
+            page += 1
+
+        logger.info(f"fetch_all_pages: collected {len(all_items)} items from {base_endpoint} across {page} page(s)")
+        return all_items
+
 
 api = APIHandler(API_BASE_URL, JEJELAYE_API_KEY)
 
@@ -314,52 +398,83 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 PAGE_SIZE = 10
 
-# Known category "type" filters from the NewJejeLaye API docs, plus a
-# friendly label and keywords to fall back on if the type filter returns
-# nothing (some categories may use different type slugs than guessed).
-SERVICE_CATEGORIES = [
-    {"key": "airtime",          "label": "📱 Airtime",           "type": "airtime",         "match": ["airtime"]},
-    {"key": "data",              "label": "📶 Data Bundles",       "type": "data",            "match": ["data"]},
-    {"key": "electricity",       "label": "⚡ Electricity",        "type": "electricity",     "match": ["electric"]},
-    {"key": "tv",                "label": "📺 Cable TV",           "type": "tv_subscription", "match": ["dstv", "gotv", "startimes", "tv"]},
-    {"key": "education",         "label": "🎓 Education PIN",      "type": "education_pin",   "match": ["waec", "neco", "jamb", "education"]},
-    {"key": "buy_logs",          "label": "🔐 Buy Logs",           "type": "buy_logs",        "match": ["log"]},
-    {"key": "bulk_sms",          "label": "📢 Bulk SMS",           "type": "bulk_sms",        "match": ["sms"]},
-    {"key": "social_boost",      "label": "🚀 Social Boost",       "type": "social_boost",    "match": ["boost", "social"]},
-    {"key": "print_card",        "label": "🖨️ Recharge Cards",     "type": "print_card",      "match": ["recharge card", "print"]},
+# Top-level product types we sell. Everything else the API might offer
+# (airtime, electricity, etc.) is intentionally left out per business focus.
+TOP_LEVEL_TYPES = [
+    {"key": "logs",   "label": "🔐 Buy Logs",     "type": "buy_logs",     "match": ["log"]},
+    {"key": "boost",  "label": "🚀 Social Boost",  "type": "social_boost", "match": ["boost", "social"]},
 ]
 
+# In-memory cache of {top_level_key: {sub_category_name: [services]}}
+# Rebuilt whenever the underlying service cache is refreshed.
+_subcategory_cache = {}
+_subcategory_cache_time = {}
+_SUBCATEGORY_CACHE_DURATION = 300  # 5 minutes
 
-def get_category_by_key(key):
-    return next((c for c in SERVICE_CATEGORIES if c["key"] == key), None)
+
+def get_top_level_by_key(key):
+    return next((t for t in TOP_LEVEL_TYPES if t["key"] == key), None)
 
 
-def fetch_services_for_category(cat):
-    """Try the API's type= filter first; fall back to fetching everything
-    and matching by category name if the type filter returns nothing."""
-    data = api.fetch(f"/services?type={cat['type']}")
-    services = data.get('data', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+def fetch_services_for_top_level(top):
+    """Pull every service under a top-level type across ALL pages.
+    Falls back to fetching all services and keyword-matching if the
+    type= filter returns nothing (e.g. wrong slug)."""
+    services = api.fetch_all_pages(f"/services?type={top['type']}")
     services = [s for s in services if s.get('is_active', True)]
 
     if services:
         return services
 
-    # Fallback: fetch all, filter by category name / service name keywords
-    data = api.fetch("/services")
-    all_services = data.get('data', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+    all_services = api.fetch_all_pages("/services")
     all_services = [s for s in all_services if s.get('is_active', True)]
 
     matched = []
     for s in all_services:
+        metadata = s.get('metadata') or {}
         cat_name = (s.get('category', {}) or {}).get('name', '').lower()
+        sub_cat_name = (metadata.get('category') or '').lower()
         service_name = (s.get('name', '') or '').lower()
-        if any(kw in cat_name or kw in service_name for kw in cat["match"]):
+        haystack = f"{cat_name} {sub_cat_name} {service_name}"
+        if any(kw in haystack for kw in top["match"]):
             matched.append(s)
     return matched
 
 
+def get_subcategories(top_key):
+    """Group a top-level type's services by their REAL sub-category, which
+    the jejelaye API stores at metadata.category (e.g. "RANDOM COUNTRIES Fb",
+    "Facebook New Account", "Gmail", etc) — NOT the outer category.name
+    field, which is always the same top-level label (e.g. "Buy Logs") for
+    every item under that type and therefore useless for grouping.
+    Returns a dict {category_name: [services]}, sorted by name."""
+    now = datetime.now()
+    cached_at = _subcategory_cache_time.get(top_key)
+    if cached_at and (now - cached_at).total_seconds() < _SUBCATEGORY_CACHE_DURATION:
+        return _subcategory_cache[top_key]
+
+    top = get_top_level_by_key(top_key)
+    services = fetch_services_for_top_level(top) if top else []
+
+    grouped = {}
+    for s in services:
+        metadata = s.get('metadata') or {}
+        # Real sub-category lives in metadata.category (a plain string).
+        # Fall back to the outer category.name only if metadata.category
+        # is missing, so nothing silently disappears from the list.
+        sub_name = metadata.get('category') or (s.get('category', {}) or {}).get('name') or "Other"
+        grouped.setdefault(sub_name, []).append(s)
+
+    # Sort sub-categories alphabetically, and keep "Other" last if present
+    sorted_grouped = dict(sorted(grouped.items(), key=lambda kv: (kv[0] == "Other", kv[0])))
+
+    _subcategory_cache[top_key] = sorted_grouped
+    _subcategory_cache_time[top_key] = now
+    return sorted_grouped
+
+
 async def browse_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show the category menu first, not a flat product list"""
+    """Show the top-level type menu: Buy Logs / Social Boost"""
     UserManager.update_last_active(update.effective_user.id)
 
     text = (
@@ -368,82 +483,88 @@ async def browse_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Choose a category to browse:"
     )
 
-    keyboard = []
-    row = []
-    for cat in SERVICE_CATEGORIES:
-        row.append(InlineKeyboardButton(cat["label"], callback_data=f"cat_{cat['key']}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    keyboard = [[InlineKeyboardButton(t["label"], callback_data=f"top_{t['key']}")] for t in TOP_LEVEL_TYPES]
     keyboard.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
 
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 
-async def category_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User picked a category -> show page 1 of products in it"""
+async def browse_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Back to the top-level type menu"""
     query = update.callback_query
     await query.answer()
 
-    cat_key = query.data.replace("cat_", "")
-    await show_category_page(query, context, cat_key, page=0)
+    text = (
+        "🛍️ *SERVICES MARKETPLACE*\n"
+        + ("═" * 30) + "\n\n"
+        "Choose a category to browse:"
+    )
+    keyboard = [[InlineKeyboardButton(t["label"], callback_data=f"top_{t['key']}")] for t in TOP_LEVEL_TYPES]
+    keyboard.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
 
 
-async def category_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Next/Prev pagination within a category"""
+async def top_level_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User picked Buy Logs or Social Boost -> show its sub-categories"""
     query = update.callback_query
     await query.answer()
 
-    # callback_data format: page_{cat_key}_{page_number}
-    _, cat_key, page_str = query.data.split("_", 2)
-    await show_category_page(query, context, cat_key, page=int(page_str))
+    top_key = query.data.replace("top_", "")
+    await show_subcategory_menu(query, top_key, page=0)
 
 
-async def show_category_page(query, context, cat_key, page):
-    cat = get_category_by_key(cat_key)
-    if not cat:
+SUBCAT_PAGE_SIZE = 10
+
+
+async def show_subcategory_menu(query, top_key, page=0):
+    top = get_top_level_by_key(top_key)
+    if not top:
         await query.edit_message_text("❌ Unknown category.")
         return
 
-    await query.edit_message_text(f"⏳ Loading {cat['label']}...")
+    await query.edit_message_text(f"⏳ Loading {top['label']}...")
 
-    services = fetch_services_for_category(cat)
+    subcats = get_subcategories(top_key)  # dict {name: [services]}
+    names = list(subcats.keys())
 
-    if not services:
-        keyboard = [[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]
+    if not names:
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back", callback_data="browse_menu")],
+            [InlineKeyboardButton("🏠 Home", callback_data="main_menu")]
+        ]
         await query.edit_message_text(
-            f"❌ No services available in {cat['label']} right now.\n\n"
+            f"❌ No sub-categories available in {top['label']} right now.\n\n"
             "Try again later or contact support.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
-    total = len(services)
-    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    total_pages = max(1, (len(names) + SUBCAT_PAGE_SIZE - 1) // SUBCAT_PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
-    start = page * PAGE_SIZE
-    page_items = services[start:start + PAGE_SIZE]
+    start = page * SUBCAT_PAGE_SIZE
+    page_names = names[start:start + SUBCAT_PAGE_SIZE]
 
     text = (
-        f"{cat['label']}  (Page {page + 1} of {total_pages})\n"
+        f"{top['label']}  (Page {page + 1} of {total_pages})\n"
         + ("═" * 30) + "\n\n"
-        "Tap a service below to buy."
+        f"{len(names)} sub-categories available. Choose one:"
     )
 
     keyboard = []
-    for service in page_items:
-        service_id = service.get('id')
-        name, price, _ = format_service_line(0, service)
-        label = f"{name[:28]} — ₦{price:,.2f}"
-        keyboard.append([InlineKeyboardButton(label, callback_data=f"buy_{cat_key}_{service_id}")])
+    for name in page_names:
+        count = len(subcats[name])
+        label = f"{name} ({count})"
+        # Encode the subcategory as its index in the full sorted list so
+        # callback_data stays short even for long category names.
+        idx = names.index(name)
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"sub|{top_key}|{idx}|0")])
 
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"page_{cat_key}_{page - 1}"))
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"subpage|{top_key}|{page - 1}"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"page_{cat_key}_{page + 1}"))
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"subpage|{top_key}|{page + 1}"))
     if nav_row:
         keyboard.append(nav_row)
 
@@ -453,41 +574,85 @@ async def show_category_page(query, context, cat_key, page):
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def browse_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Back button from a product page -> category menu again"""
+async def subcategory_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Next/Prev pagination across the sub-category list itself"""
+    query = update.callback_query
+    await query.answer()
+    _, top_key, page_str = query.data.split("|", 2)
+    await show_subcategory_menu(query, top_key, page=int(page_str))
+
+
+async def subcategory_products_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User picked a sub-category -> show its products, paginated.
+    callback_data format: sub_{top_key}_{subcat_index}_{page}"""
     query = update.callback_query
     await query.answer()
 
+    _, top_key, subcat_idx_str, page_str = query.data.split("|", 3)
+    await show_products_page(query, top_key, int(subcat_idx_str), int(page_str))
+
+
+async def show_products_page(query, top_key, subcat_idx, page):
+    top = get_top_level_by_key(top_key)
+    subcats = get_subcategories(top_key)
+    names = list(subcats.keys())
+
+    if not top or subcat_idx >= len(names):
+        await query.edit_message_text("❌ This category is no longer available.")
+        return
+
+    subcat_name = names[subcat_idx]
+    services = subcats[subcat_name]
+
+    total = len(services)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * PAGE_SIZE
+    page_items = services[start:start + PAGE_SIZE]
+
     text = (
-        "🛍️ *SERVICES MARKETPLACE*\n"
+        f"🔐 {subcat_name}  (Page {page + 1} of {total_pages} — {total} items)\n"
         + ("═" * 30) + "\n\n"
-        "Choose a category to browse:"
+        "Tap a service below to buy."
     )
 
     keyboard = []
-    row = []
-    for cat in SERVICE_CATEGORIES:
-        row.append(InlineKeyboardButton(cat["label"], callback_data=f"cat_{cat['key']}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
+    for service in page_items:
+        service_id = service.get('id')
+        name, price, _ = format_service_line(0, service)
+        label = f"{name[:28]} — ₦{price:,.2f}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"buy|{top_key}|{subcat_idx}|{service_id}")])
+
+    nav_row = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"sub|{top_key}|{subcat_idx}|{page - 1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"sub|{top_key}|{subcat_idx}|{page + 1}"))
+    if nav_row:
+        keyboard.append(nav_row)
+
+    keyboard.append([InlineKeyboardButton("🔙 Sub-categories", callback_data=f"top_{top_key}")])
     keyboard.append([InlineKeyboardButton("🏠 Back", callback_data="main_menu")])
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='Markdown')
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 async def buy_service_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle a user tapping a specific service to buy.
-    callback_data format: buy_{cat_key}_{service_id}"""
+    callback_data format: buy_{top_key}_{subcat_idx}_{service_id}"""
     query = update.callback_query
     await query.answer()
 
-    _, cat_key, service_id = query.data.split("_", 2)
-    cat = get_category_by_key(cat_key)
-    services = fetch_services_for_category(cat) if cat else []
+    _, top_key, subcat_idx_str, service_id = query.data.split("|", 3)
+    subcats = get_subcategories(top_key)
+    names = list(subcats.keys())
+    subcat_idx = int(subcat_idx_str)
 
+    if subcat_idx >= len(names):
+        await query.edit_message_text("❌ This service is no longer available.")
+        return
+
+    services = subcats[names[subcat_idx]]
     service = next((s for s in services if str(s.get('id')) == service_id), None)
     if not service:
         await query.edit_message_text("❌ This service is no longer available.")
@@ -513,7 +678,7 @@ async def buy_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         text += "Tap confirm to complete this purchase."
         keyboard = [
-            [InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm_{cat_key}_{service_id}")],
+            [InlineKeyboardButton("✅ Confirm Purchase", callback_data=f"confirm|{top_key}|{subcat_idx}|{service_id}")],
             [InlineKeyboardButton("🏠 Cancel", callback_data="main_menu")]
         ]
 
@@ -522,17 +687,24 @@ async def buy_service_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def confirm_purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Actually deduct balance and log the purchase.
-    callback_data format: confirm_{cat_key}_{service_id}
+    callback_data format: confirm_{top_key}_{subcat_idx}_{service_id}
     NOTE: This does not yet call a jejelaye purchase/order endpoint —
-    ask your API engineer for the exact request body needed per category
-    (e.g. phone number, meter number, recipient email) before wiring real
-    fulfillment through POST /services/{service_id}/purchase."""
+    ask your API engineer for the exact request body needed (e.g. delivery
+    email, recipient info) before wiring real fulfillment through
+    POST /services/{service_id}/purchase."""
     query = update.callback_query
     await query.answer()
 
-    _, cat_key, service_id = query.data.split("_", 2)
-    cat = get_category_by_key(cat_key)
-    services = fetch_services_for_category(cat) if cat else []
+    _, top_key, subcat_idx_str, service_id = query.data.split("|", 3)
+    subcats = get_subcategories(top_key)
+    names = list(subcats.keys())
+    subcat_idx = int(subcat_idx_str)
+
+    if subcat_idx >= len(names):
+        await query.edit_message_text("❌ This service is no longer available.")
+        return
+
+    services = subcats[names[subcat_idx]]
     service = next((s for s in services if str(s.get('id')) == service_id), None)
 
     if not service:
@@ -664,7 +836,8 @@ async def show_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📞 *SUPPORT*\n"
         + ("═" * 30) + "\n\n"
         "Having an issue? Reach out and we'll sort you out quickly.\n\n"
-        "💬 Message the admin directly through this bot.\n"
+        "💬 Telegram: @magicnigga\n"
+        "📱 WhatsApp: +2348144841843\n"
     )
 
     keyboard = [[InlineKeyboardButton("🏠 Back", callback_data="main_menu")]]
@@ -879,13 +1052,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await main_menu_callback(update, context)
     elif data == "browse_menu":
         await browse_menu_callback(update, context)
-    elif data.startswith("cat_"):
-        await category_callback(update, context)
-    elif data.startswith("page_"):
-        await category_page_callback(update, context)
-    elif data.startswith("buy_"):
+    elif data.startswith("top_"):
+        await top_level_callback(update, context)
+    elif data.startswith("subpage|"):
+        await subcategory_page_callback(update, context)
+    elif data.startswith("sub|"):
+        await subcategory_products_callback(update, context)
+    elif data.startswith("buy|"):
         await buy_service_callback(update, context)
-    elif data.startswith("confirm_") and not data.startswith("confirm_transfer"):
+    elif data.startswith("confirm|"):
         await confirm_purchase_callback(update, context)
     elif data == "request_balance":
         await request_balance_callback(update, context)
@@ -910,8 +1085,20 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== MAIN ====================
 def main():
-    if TELEGRAM_BOT_TOKEN in ("", "YOUR_TELEGRAM_BOT_TOKEN_HERE"):
-        logger.error("❌ TELEGRAM_BOT_TOKEN not configured!")
+    missing = []
+    if not TELEGRAM_BOT_TOKEN:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not JEJELAYE_API_KEY:
+        missing.append("JEJELAYE_API_KEY")
+    if not ADMIN_IDS:
+        missing.append("ADMIN_IDS")
+
+    if missing:
+        logger.error(f"❌ Missing required environment variable(s): {', '.join(missing)}")
+        logger.error("Set them before running, e.g.:")
+        logger.error("  export TELEGRAM_BOT_TOKEN='your-token-from-botfather'")
+        logger.error("  export JEJELAYE_API_KEY='your-api-key'")
+        logger.error("  export ADMIN_IDS='7190018261'")
         return
 
     logger.info("🚀 Starting bot...")
